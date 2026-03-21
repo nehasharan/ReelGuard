@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand -->
+    <color name="brand_green">#2E7D32</color>
+    <color name="brand_green_light">#4CAF50</color>
+    <color name="brand_green_dark">#1B5E20</color>
+
+    <!-- Backgrounds -->
+    <color name="bg_primary">#F5F5F5</color>
+    <color name="bg_card">#FFFFFF</color>
+
+    <!-- Text -->
+    <color name="text_primary">#1A1A1A</color>
+    <color name="text_secondary">#666666</color>
+    <color name="text_tertiary">#999999</color>
+
+    <!-- Status colors -->
+    <color name="status_ok">#4CAF50</color>
+    <color name="status_warning">#FF9800</color>
+    <color name="status_error">#F44336</color>
+    <color name="status_scam">#D32F2F</color>
+    <color name="status_idle">#9E9E9E</color>
+
+    <!-- Switch colors -->
+    <color name="switch_thumb_color">#4CAF50</color>
+    <color name="switch_track_color">#A5D6A7</color>
+
+    <!-- Launcher icon -->
+    <color name="ic_launcher_background">#2E7D32</color>
+</resources>

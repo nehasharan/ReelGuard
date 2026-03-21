@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/accessibility_service_description"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="500"
+    android:canRetrieveWindowContent="true"
+    android:settingsActivity="com.reelguard.app.ui.MainActivity"
+    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews" />
+<!--
+    NOTE: We do NOT set android:packageNames here because we filter
+    dynamically in code based on user preferences. This allows users
+    to choose which apps ReelGuard monitors (Instagram, YouTube, Chrome, etc.)
+-->

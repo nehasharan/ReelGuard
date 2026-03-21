@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ReelGuard</string>
+    <string name="accessibility_service_description">
+        ReelGuard reads on-screen text from your selected apps to detect
+        misinformation, scams, and false claims in real time.
+
+        \n\nReelGuard only monitors apps you explicitly enable in settings.
+        No screenshots are taken. Only extracted text is analyzed.
+        Raw content is never stored on our servers.
+    </string>
+</resources>

@@ -39,6 +39,7 @@ data class MonitoredApp(
     companion object {
         val DEFAULTS = listOf(
             MonitoredApp("com.instagram.android", "Instagram"),
+            MonitoredApp("com.instagram.barcelona", "Threads"),
             MonitoredApp("com.google.android.youtube", "YouTube"),
             MonitoredApp("com.twitter.android", "X (Twitter)"),
             MonitoredApp("com.zhiliaoapp.musically", "TikTok"),

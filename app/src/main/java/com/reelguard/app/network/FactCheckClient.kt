@@ -35,7 +35,7 @@ class FactCheckClient {
         private const val TAG = "FactCheckClient"
 
         // TODO: Replace with your backend URL
-        private const val BASE_URL = "https://your-backend.example.com/api"
+        private const val BASE_URL = "http://192.168.1.207:8000/api"
         private const val ENDPOINT_CHECK = "$BASE_URL/fact-check"
 
         private const val TIMEOUT_MS = 15_000

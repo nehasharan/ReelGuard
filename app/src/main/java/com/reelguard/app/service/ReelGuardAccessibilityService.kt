@@ -6,7 +6,6 @@ import android.content.Intent
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.reelguard.app.model.MonitoredApp
 import com.reelguard.app.model.ScreenContent
 import com.reelguard.app.network.FactCheckClient
 import com.reelguard.app.util.ContentDeduplicator
@@ -16,25 +15,20 @@ import kotlinx.coroutines.*
 /**
  * ReelGuard Accessibility Service
  *
- * This is the core agent. It:
- * 1. Listens for screen content changes in user-approved apps
- * 2. Extracts visible text from the screen's view hierarchy
- * 3. Deduplicates to avoid re-checking the same content
- * 4. Sends novel claims to the fact-checking backend
- * 5. Notifies the OverlayService to update the floating bubble
+ * This service:
+ * 1. Shows the bubble when a monitored app is in foreground
+ * 2. Silently captures visible text in the background (no API calls)
+ * 3. Only sends text for fact-checking when user TAPS the bubble
  *
- * PRIVACY: Only activates for apps the user explicitly enables.
- * Raw screen content is never stored — only extracted text is sent to the API.
+ * This is much more efficient — no wasted API calls on content
+ * the user scrolls past quickly.
  */
 class ReelGuardAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "ReelGuardA11y"
+        private const val TEXT_CAPTURE_DEBOUNCE_MS = 1000L
 
-        // Debounce: don't process events faster than this
-        private const val DEBOUNCE_MS = 2000L
-
-        // Singleton ref so other components can check if service is running
         var instance: ReelGuardAccessibilityService? = null
             private set
     }
@@ -43,9 +37,14 @@ class ReelGuardAccessibilityService : AccessibilityService() {
     private val factCheckClient = FactCheckClient()
     private val deduplicator = ContentDeduplicator()
 
-    private var lastProcessedTime = 0L
+    private var lastCaptureTime = 0L
     private var currentAppPackage: String? = null
     private var processingJob: Job? = null
+
+    // Cached screen content — updated on scroll, analyzed on tap
+    @Volatile
+    var currentScreenContent: ScreenContent? = null
+        private set
 
     // ─── Lifecycle ───
 
@@ -54,7 +53,6 @@ class ReelGuardAccessibilityService : AccessibilityService() {
         instance = this
         Log.i(TAG, "ReelGuard Accessibility Service connected")
 
-        // Dynamically configure which events we care about
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -80,31 +78,20 @@ class ReelGuardAccessibilityService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
 
-        // PRIVACY GATE: Only process events from user-approved apps
         if (!isMonitoredApp(packageName)) return
 
-        // Track which app is in foreground
+        // Track app switches — show/hide bubble
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handleAppSwitch(packageName)
             return
         }
 
-        // Debounce rapid events (scrolling generates many)
+        // Silently capture text (debounced) — NO API call here
         val now = System.currentTimeMillis()
-        if (now - lastProcessedTime < DEBOUNCE_MS) return
-        lastProcessedTime = now
+        if (now - lastCaptureTime < TEXT_CAPTURE_DEBOUNCE_MS) return
+        lastCaptureTime = now
 
-        // Cancel previous processing if still running
-        processingJob?.cancel()
-
-        // Extract and process screen content
-        processingJob = serviceScope.launch {
-            try {
-                processScreenContent(packageName)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error processing screen content", e)
-            }
-        }
+        captureScreenText(packageName)
     }
 
     override fun onInterrupt() {
@@ -112,77 +99,89 @@ class ReelGuardAccessibilityService : AccessibilityService() {
         processingJob?.cancel()
     }
 
-    // ─── Content Extraction ───
+    // ─── Silent Text Capture (no API call) ───
 
-    /**
-     * Walk the view hierarchy and extract all visible text.
-     * This is how we "see" what's on screen without taking screenshots.
-     */
-    private suspend fun processScreenContent(packageName: String) {
+    private fun captureScreenText(packageName: String) {
         val rootNode = rootInActiveWindow ?: return
 
         val texts = mutableListOf<String>()
         extractTextsFromNode(rootNode, texts)
         rootNode.recycle()
 
-        val screenContent = ScreenContent(
-            appPackage = packageName,
-            texts = texts
-        )
+        val content = ScreenContent(appPackage = packageName, texts = texts)
 
-        // Skip if not enough substantive content
-        if (!screenContent.hasSubstantiveContent()) {
-            Log.d(TAG, "Skipping — not enough substantive content")
-            return
-        }
-
-        // Skip if we've already checked this content
-        val contentHash = screenContent.mergedText().hashCode().toString()
-        if (deduplicator.isDuplicate(contentHash)) {
-            Log.d(TAG, "Skipping — duplicate content")
-            return
-        }
-
-        Log.i(TAG, "New content detected in $packageName, sending for fact-check")
-        Log.d(TAG, "Content preview: ${screenContent.mergedText().take(200)}...")
-
-        // Update overlay to show "checking..." state
-        notifyOverlay(processing = true)
-
-        // Send to fact-checking backend
-        val result = factCheckClient.checkContent(screenContent)
-
-        if (result != null) {
-            Log.i(TAG, "Verdict: ${result.overallVerdict} — ${result.summary}")
-            notifyOverlay(processing = false, result = result)
-        } else {
-            Log.w(TAG, "Fact-check returned null (API error or timeout)")
-            notifyOverlay(processing = false, error = true)
+        if (content.hasSubstantiveContent()) {
+            currentScreenContent = content
+            Log.d(TAG, "Screen text captured (${content.mergedText().length} chars)")
         }
     }
 
+    // ─── Fact-Check on Demand (called when user taps bubble) ───
+
     /**
-     * Recursively traverse the accessibility node tree and collect text.
-     * Filters out very short strings (likely UI buttons) to reduce noise.
+     * Called by OverlayService when the user taps the bubble.
+     * Takes the currently cached screen text and sends it for analysis.
      */
+    fun analyzeCurrentContent() {
+        val content = currentScreenContent
+        if (content == null) {
+            Log.w(TAG, "No content captured yet")
+            notifyOverlay(error = true)
+            return
+        }
+
+        if (!content.hasSubstantiveContent()) {
+            Log.w(TAG, "Current content is not substantive enough")
+            notifyOverlay(error = true)
+            return
+        }
+
+        // Check dedup — don't re-analyze same content
+        val contentHash = content.mergedText().hashCode().toString()
+        if (deduplicator.isDuplicate(contentHash)) {
+            Log.d(TAG, "Already analyzed this content")
+            // Still show processing briefly so user gets feedback
+        }
+
+        // Cancel previous analysis
+        processingJob?.cancel()
+
+        processingJob = serviceScope.launch {
+            try {
+                Log.i(TAG, "User requested fact-check for ${content.appPackage}")
+                Log.d(TAG, "Content: ${content.mergedText().take(200)}...")
+
+                notifyOverlay(processing = true)
+
+                val result = factCheckClient.checkContent(content)
+
+                if (result != null) {
+                    Log.i(TAG, "Verdict: ${result.overallVerdict} — ${result.summary}")
+                    notifyOverlay(processing = false, result = result)
+                } else {
+                    Log.w(TAG, "Fact-check returned null")
+                    notifyOverlay(processing = false, error = true)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during fact-check", e)
+                notifyOverlay(processing = false, error = true)
+            }
+        }
+    }
+
+    // ─── Text Extraction ───
+
     private fun extractTextsFromNode(node: AccessibilityNodeInfo?, texts: MutableList<String>) {
         node ?: return
 
-        // Extract text from this node
         node.text?.toString()?.let { text ->
-            if (text.isNotBlank()) {
-                texts.add(text)
-            }
+            if (text.isNotBlank()) texts.add(text)
         }
 
-        // Also check content description (used for image alt text, etc.)
         node.contentDescription?.toString()?.let { desc ->
-            if (desc.isNotBlank() && desc.length > 15) {
-                texts.add("[desc] $desc")
-            }
+            if (desc.isNotBlank() && desc.length > 15) texts.add("[desc] $desc")
         }
 
-        // Recurse into children
         for (i in 0 until node.childCount) {
             val child = node.getChild(i)
             extractTextsFromNode(child, texts)
@@ -193,7 +192,6 @@ class ReelGuardAccessibilityService : AccessibilityService() {
     // ─── App Filtering ───
 
     private fun isMonitoredApp(packageName: String): Boolean {
-        // Check against user's configured list of apps
         val monitoredApps = PrefsManager.getMonitoredApps(this)
         return monitoredApps.any { it.packageName == packageName && it.isEnabled }
     }
@@ -204,10 +202,8 @@ class ReelGuardAccessibilityService : AccessibilityService() {
             Log.d(TAG, "App switched to: $newPackage")
 
             if (isMonitoredApp(newPackage)) {
-                // Show overlay when entering a monitored app
                 startOverlayService()
             } else {
-                // Hide overlay when leaving monitored apps
                 hideOverlay()
             }
         }

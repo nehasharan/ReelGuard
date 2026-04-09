@@ -13,7 +13,14 @@
     <!-- Foreground service for persistent overlay -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Audio capture for speech-to-text -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Screen capture for OCR -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:name=".ReelGuardApp"
@@ -54,6 +61,12 @@
             android:name=".service.OverlayService"
             android:exported="false"
             android:foregroundServiceType="specialUse" />
+
+        <!-- Media Capture Service: Screen capture + audio for OCR and speech-to-text -->
+        <service
+            android:name=".service.MediaCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
     </application>
 </manifest>

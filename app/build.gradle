@@ -47,10 +47,12 @@ dependencies {
     // Coroutines for async work
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
-    // OkHttp for network calls (optional, can replace HttpURLConnection)
-    // implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // ML Kit OCR (on-device text recognition)
+    implementation 'com.google.mlkit:text-recognition:16.0.0'
 
-    // Retrofit for cleaner API client (optional upgrade)
-    // implementation 'com.squareup.retrofit2:retrofit:2.9.0'
-    // implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
+    // Google Speech-to-Text (for audio transcription)
+    // Uses on-device SpeechRecognizer — no extra dependency needed
+
+    // Activity result APIs for MediaProjection permission
+    implementation 'androidx.activity:activity-ktx:1.8.2'
 }

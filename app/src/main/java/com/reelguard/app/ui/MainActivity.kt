@@ -1,8 +1,12 @@
 package com.reelguard.app.ui
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -11,16 +15,52 @@ import android.view.accessibility.AccessibilityManager
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.reelguard.app.R
 import com.reelguard.app.databinding.ActivityMainBinding
+import com.reelguard.app.service.MediaCaptureService
 import com.reelguard.app.service.ReelGuardAccessibilityService
 import com.reelguard.app.util.PrefsManager
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+
+    // MediaProjection permission launcher
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            // Start the MediaCaptureService with the projection result
+            val intent = Intent(this, MediaCaptureService::class.java).apply {
+                action = MediaCaptureService.ACTION_START
+                putExtra(MediaCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(MediaCaptureService.EXTRA_RESULT_DATA, result.data)
+            }
+            startForegroundService(intent)
+            Toast.makeText(this, "Video analysis enabled!", Toast.LENGTH_SHORT).show()
+            updateVideoCaptureStatus()
+        } else {
+            Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Audio permission launcher
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // Audio permission granted, now request screen capture
+            requestScreenCapture()
+        } else {
+            Toast.makeText(this, "Audio permission needed for speech-to-text", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +69,7 @@ class MainActivity : AppCompatActivity() {
 
         setupMasterToggle()
         setupPermissionRows()
+        setupVideoCaptureButton()
         setupHowItWorks()
     }
 
@@ -36,6 +77,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         updatePermissionStatus()
         updateOverallStatus()
+        updateVideoCaptureStatus()
         populateAppList()
     }
 
@@ -47,6 +89,47 @@ class MainActivity : AppCompatActivity() {
             PrefsManager.setAgentEnabled(this, isChecked)
             updateOverallStatus()
         }
+    }
+
+    // ─── Video Capture ───
+
+    private fun setupVideoCaptureButton() {
+        binding.videoCaptureButton.setOnClickListener {
+            if (MediaCaptureService.instance != null) {
+                // Already running — stop it
+                val intent = Intent(this, MediaCaptureService::class.java).apply {
+                    action = MediaCaptureService.ACTION_STOP
+                }
+                startService(intent)
+                Toast.makeText(this, "Video analysis disabled", Toast.LENGTH_SHORT).show()
+                updateVideoCaptureStatus()
+            } else {
+                // Request audio permission first, then screen capture
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    requestScreenCapture()
+                }
+            }
+        }
+    }
+
+    private fun requestScreenCapture() {
+        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+    }
+
+    private fun updateVideoCaptureStatus() {
+        val isActive = MediaCaptureService.instance != null
+        binding.videoCaptureButton.text = if (isActive) "Disable Video Analysis" else "Enable Video Analysis"
+        binding.videoCaptureStatus.text = if (isActive)
+            "Active — OCR + speech-to-text enabled"
+        else
+            "Not active — text-only mode"
+        binding.videoCaptureStatus.setTextColor(
+            getColor(if (isActive) R.color.status_ok else R.color.text_tertiary)
+        )
     }
 
     // ─── Permission Rows ───

@@ -120,40 +120,86 @@ class ReelGuardAccessibilityService : AccessibilityService() {
 
     /**
      * Called by OverlayService when the user taps the bubble.
-     * Takes the currently cached screen text and sends it for analysis.
+     *
+     * Smart detection:
+     * - Text post (lots of a11y text): skip audio, just quick OCR + text → fast (~5s)
+     * - Video/reel (little a11y text): full OCR + 30s audio capture → thorough (~35s)
      */
     fun analyzeCurrentContent() {
-        val content = currentScreenContent
-        if (content == null) {
-            Log.w(TAG, "No content captured yet")
-            notifyOverlay(error = true)
-            return
-        }
-
-        if (!content.hasSubstantiveContent()) {
-            Log.w(TAG, "Current content is not substantive enough")
-            notifyOverlay(error = true)
-            return
-        }
-
-        // Check dedup — don't re-analyze same content
-        val contentHash = content.mergedText().hashCode().toString()
-        if (deduplicator.isDuplicate(contentHash)) {
-            Log.d(TAG, "Already analyzed this content")
-            // Still show processing briefly so user gets feedback
-        }
-
         // Cancel previous analysis
         processingJob?.cancel()
 
         processingJob = serviceScope.launch {
             try {
-                Log.i(TAG, "User requested fact-check for ${content.appPackage}")
-                Log.d(TAG, "Content: ${content.mergedText().take(200)}...")
-
                 notifyOverlay(processing = true)
 
-                val result = factCheckClient.checkContent(content)
+                val allTexts = mutableListOf<String>()
+
+                // Source 1: Accessibility tree text (already captured)
+                val a11yContent = currentScreenContent
+                val a11yText = a11yContent?.mergedText() ?: ""
+
+                if (a11yText.isNotBlank()) {
+                    allTexts.add(a11yText)
+                    Log.i(TAG, "A11y text: ${a11yText.take(100)}...")
+                }
+
+                // Decide: is this a text-heavy post or a video?
+                // Text posts typically have 200+ chars of readable text
+                // Videos/reels have mostly UI labels with little substantive text
+                val isTextPost = a11yText.length > 200
+                    && a11yText.split(" ").size > 30
+
+                val captureService = MediaCaptureService.instance
+
+                if (captureService != null) {
+                    if (isTextPost) {
+                        // TEXT POST: just do a quick OCR for any text in images, skip audio
+                        Log.i(TAG, "Text post detected (${a11yText.length} chars) — quick OCR only, skipping audio")
+                        try {
+                            val ocrText = captureService.captureScreenAndOCR()
+                            if (ocrText.isNotBlank()) {
+                                allTexts.add("[Image text]: $ocrText")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Quick OCR failed", e)
+                        }
+                    } else {
+                        // VIDEO/REEL: full OCR + 30s audio capture
+                        Log.i(TAG, "Video/reel detected (${a11yText.length} chars) — full OCR + 30s audio")
+                        val mediaText = captureService.captureAndExtractAll()
+                        if (mediaText.isNotBlank()) {
+                            allTexts.add(mediaText)
+                            Log.i(TAG, "Media text: ${mediaText.take(100)}...")
+                        }
+                    }
+                } else {
+                    Log.d(TAG, "MediaCaptureService not running — text-only analysis")
+                }
+
+                // Combine all sources
+                val combinedText = allTexts.joinToString("\n\n---\n\n")
+
+                if (combinedText.isBlank() || combinedText.length < 20) {
+                    Log.w(TAG, "Not enough content to analyze")
+                    notifyOverlay(processing = false, error = true)
+                    return@launch
+                }
+
+                val enrichedContent = com.reelguard.app.model.ScreenContent(
+                    appPackage = currentAppPackage ?: "unknown",
+                    texts = listOf(combinedText)
+                )
+
+                val contentHash = combinedText.hashCode().toString()
+                if (deduplicator.isDuplicate(contentHash)) {
+                    Log.d(TAG, "Already analyzed this content")
+                }
+
+                val mode = if (isTextPost) "text-post" else "video"
+                Log.i(TAG, "Sending ${combinedText.length} chars ($mode mode) for fact-check")
+
+                val result = factCheckClient.checkContent(enrichedContent)
 
                 if (result != null) {
                     Log.i(TAG, "Verdict: ${result.overallVerdict} — ${result.summary}")

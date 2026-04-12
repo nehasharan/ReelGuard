@@ -79,6 +79,16 @@ class MainActivity : AppCompatActivity() {
         updateOverallStatus()
         updateVideoCaptureStatus()
         populateAppList()
+
+        // When user opens the app, activate the bubble
+        // It will show next time they switch to a monitored app
+        if (PrefsManager.isAgentEnabled(this)) {
+            PrefsManager.setBubbleActive(this, true)
+            val intent = Intent(this, com.reelguard.app.service.OverlayService::class.java).apply {
+                action = com.reelguard.app.service.OverlayService.ACTION_SHOW
+            }
+            startService(intent)
+        }
     }
 
     // ─── Master Toggle ───
@@ -87,6 +97,14 @@ class MainActivity : AppCompatActivity() {
         binding.masterToggle.isChecked = PrefsManager.isAgentEnabled(this)
         binding.masterToggle.setOnCheckedChangeListener { _, isChecked ->
             PrefsManager.setAgentEnabled(this, isChecked)
+            PrefsManager.setBubbleActive(this, isChecked)
+            if (!isChecked) {
+                // Hide bubble immediately when toggled off
+                val intent = Intent(this, com.reelguard.app.service.OverlayService::class.java).apply {
+                    action = com.reelguard.app.service.OverlayService.ACTION_HIDE
+                }
+                startService(intent)
+            }
             updateOverallStatus()
         }
     }

@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import com.reelguard.app.R
 import com.reelguard.app.model.VerdictLevel
 import com.reelguard.app.ui.MainActivity
+import com.reelguard.app.util.PrefsManager
 
 /**
  * Overlay Service — Floating bubble with progress feedback.
@@ -50,7 +51,9 @@ class OverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var bubbleView: View? = null
     private var expandedView: View? = null
+    private var dismissZoneView: View? = null
     private var isExpanded = false
+    private var isDismissed = false
 
     // UI references inside the bubble
     private var indicatorView: View? = null
@@ -76,9 +79,13 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_SHOW -> showBubble()
+            ACTION_SHOW -> {
+                isDismissed = false  // Reset dismiss state
+                showBubble()
+            }
             ACTION_HIDE -> hideBubble()
             ACTION_UPDATE -> {
+                if (isDismissed) return START_STICKY  // Don't show updates if user dismissed
                 val processing = intent.getBooleanExtra(EXTRA_PROCESSING, false)
                 val error = intent.getBooleanExtra(EXTRA_ERROR, false)
                 val verdict = intent.getStringExtra(EXTRA_VERDICT)
@@ -233,6 +240,7 @@ class OverlayService : Service() {
 
     private fun showBubble() {
         if (bubbleView != null) return
+        if (isDismissed) return  // User dismissed, don't show until they reopen the app
 
         // Build bubble: circle indicator + status label below it
         val container = LinearLayout(this).apply {
@@ -267,12 +275,13 @@ class OverlayService : Service() {
 
         bubbleView = container
 
-        // Make draggable + tappable
+        // Make draggable + tappable + dismissable
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
         var isDragging = false
+        val screenHeight = resources.displayMetrics.heightPixels
 
         container.setOnTouchListener { view, event ->
             val params = view.layoutParams as WindowManager.LayoutParams
@@ -283,6 +292,7 @@ class OverlayService : Service() {
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isDragging = false
+                    showDismissZone()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -292,10 +302,21 @@ class OverlayService : Service() {
                     params.x = initialX - dx
                     params.y = initialY + dy
                     windowManager?.updateViewLayout(view, params)
+
+                    // Highlight dismiss zone when bubble is near bottom
+                    val isNearBottom = event.rawY > screenHeight - dpToPx(120)
+                    updateDismissZoneHighlight(isNearBottom)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!isDragging) onBubbleTapped()
+                    hideDismissZone()
+                    // Check if dropped in dismiss zone
+                    val isNearBottom = event.rawY > screenHeight - dpToPx(120)
+                    if (isDragging && isNearBottom) {
+                        dismissBubble()
+                    } else if (!isDragging) {
+                        onBubbleTapped()
+                    }
                     true
                 }
                 else -> false
@@ -332,7 +353,87 @@ class OverlayService : Service() {
             indicatorView = null
             statusLabel = null
         }
+        hideDismissZone()
         collapseExpanded()
+    }
+
+    // ─── Dismiss Zone (drag-to-close) ───
+
+    /**
+     * Show a dismiss zone at the bottom of the screen.
+     * Appears when user starts dragging the bubble.
+     */
+    private fun showDismissZone() {
+        if (dismissZoneView != null) return
+
+        val screenWidth = resources.displayMetrics.widthPixels
+        val zoneHeight = dpToPx(80)
+
+        val zone = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(0x60000000)
+
+            val icon = TextView(this@OverlayService).apply {
+                text = "✕"
+                textSize = 22f
+                setTextColor(0xAAFFFFFF.toInt())
+                gravity = Gravity.CENTER
+            }
+            addView(icon)
+
+            val label = TextView(this@OverlayService).apply {
+                text = "Drag here to close"
+                textSize = 12f
+                setTextColor(0x99FFFFFF.toInt())
+                gravity = Gravity.CENTER
+                setPadding(0, dpToPx(2), 0, 0)
+            }
+            addView(label)
+        }
+
+        val params = WindowManager.LayoutParams(
+            screenWidth,
+            zoneHeight,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        }
+
+        try {
+            dismissZoneView = zone
+            windowManager?.addView(zone, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show dismiss zone", e)
+        }
+    }
+
+    private fun updateDismissZoneHighlight(isNearBottom: Boolean) {
+        dismissZoneView?.setBackgroundColor(
+            if (isNearBottom) 0xA0FF0000.toInt() else 0x60000000
+        )
+    }
+
+    private fun hideDismissZone() {
+        dismissZoneView?.let {
+            try { windowManager?.removeView(it) } catch (_: Exception) {}
+            dismissZoneView = null
+        }
+    }
+
+    /**
+     * Dismiss the bubble. It stays hidden until the user reopens ReelGuard
+     * or switches to a monitored app again.
+     */
+    private fun dismissBubble() {
+        Log.i(TAG, "Bubble dismissed by user")
+        isDismissed = true
+        PrefsManager.setBubbleActive(this, false)
+        hideBubble()
+        updateNotification("ReelGuard paused — open app to resume")
     }
 
     // ─── Tap Handling ───

@@ -86,6 +86,9 @@ class ReelGuardAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Don't capture text if bubble isn't active (user hasn't opened app or dismissed it)
+        if (!PrefsManager.isBubbleActive(this)) return
+
         // Silently capture text (debounced) — NO API call here
         val now = System.currentTimeMillis()
         if (now - lastCaptureTime < TEXT_CAPTURE_DEBOUNCE_MS) return
@@ -148,7 +151,7 @@ class ReelGuardAccessibilityService : AccessibilityService() {
                 // Text posts typically have 200+ chars of readable text
                 // Videos/reels have mostly UI labels with little substantive text
                 val isTextPost = a11yText.length > 200
-                    && a11yText.split(" ").size > 30
+                        && a11yText.split(" ").size > 30
 
                 val captureService = MediaCaptureService.instance
 
@@ -197,12 +200,40 @@ class ReelGuardAccessibilityService : AccessibilityService() {
                 }
 
                 val mode = if (isTextPost) "text-post" else "video"
-                Log.i(TAG, "Sending ${combinedText.length} chars ($mode mode) for fact-check")
+                Log.i(TAG, "═══════════════════════════════════════")
+                Log.i(TAG, "SENDING FOR FACT-CHECK ($mode mode)")
+                Log.i(TAG, "═══════════════════════════════════════")
+                Log.i(TAG, "App: ${currentAppPackage}")
+                Log.i(TAG, "Text length: ${combinedText.length} chars")
+                Log.i(TAG, "A11y text: ${a11yText.take(300)}...")
+                if (combinedText.length > a11yText.length) {
+                    Log.i(TAG, "Media text: ${combinedText.drop(a11yText.length).take(300)}...")
+                }
 
                 val result = factCheckClient.checkContent(enrichedContent)
 
                 if (result != null) {
-                    Log.i(TAG, "Verdict: ${result.overallVerdict} — ${result.summary}")
+                    Log.i(TAG, "═══════════════════════════════════════")
+                    Log.i(TAG, "FACT-CHECK RESULT")
+                    Log.i(TAG, "═══════════════════════════════════════")
+                    Log.i(TAG, "Overall: ${result.overallVerdict}")
+                    Log.i(TAG, "Summary: ${result.summary}")
+                    Log.i(TAG, "Claims found: ${result.claims.size}")
+                    result.claims.forEachIndexed { i, claim ->
+                        Log.i(TAG, "───────────────────────────────────")
+                        Log.i(TAG, "Claim ${i + 1}: ${claim.text}")
+                        Log.i(TAG, "Verdict: ${claim.verdict}")
+                        Log.i(TAG, "Explanation: ${claim.explanation}")
+                        if (claim.sources.isNotEmpty()) {
+                            Log.i(TAG, "Sources:")
+                            claim.sources.forEach { source ->
+                                Log.i(TAG, "  → $source")
+                            }
+                        } else {
+                            Log.i(TAG, "Sources: (none)")
+                        }
+                    }
+                    Log.i(TAG, "═══════════════════════════════════════")
                     notifyOverlay(processing = false, result = result)
                 } else {
                     Log.w(TAG, "Fact-check returned null")
@@ -247,7 +278,7 @@ class ReelGuardAccessibilityService : AccessibilityService() {
             currentAppPackage = newPackage
             Log.d(TAG, "App switched to: $newPackage")
 
-            if (isMonitoredApp(newPackage)) {
+            if (isMonitoredApp(newPackage) && PrefsManager.isBubbleActive(this)) {
                 startOverlayService()
             } else {
                 hideOverlay()

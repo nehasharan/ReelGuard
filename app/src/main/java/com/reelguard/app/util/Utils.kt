@@ -47,6 +47,7 @@ object PrefsManager {
 
     private const val PREFS_NAME = "reelguard_prefs"
     private const val KEY_ENABLED = "agent_enabled"
+    private const val KEY_BUBBLE_ACTIVE = "bubble_active"
     private const val KEY_MONITORED_PREFIX = "monitored_"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -59,6 +60,19 @@ object PrefsManager {
 
     fun setAgentEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
+    }
+
+    // ─── Bubble State ───
+    // Tracks whether the bubble should be shown.
+    // false by default (user hasn't opened app yet)
+    // true when user opens the app with agent enabled
+    // false when user dismisses the bubble
+
+    fun isBubbleActive(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BUBBLE_ACTIVE, false)
+
+    fun setBubbleActive(context: Context, active: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BUBBLE_ACTIVE, active).apply()
     }
 
     // ─── Monitored Apps ───
